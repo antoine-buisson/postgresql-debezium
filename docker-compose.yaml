@@ -54,6 +54,42 @@ services:
       VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
       CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
 
+
+  flink-jobmanager:
+    build:
+      dockerfile: ./flink.Dockerfile
+    ports:
+      - "8081:8081"
+    command: jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager        
+
+  flink-taskmanager:
+    build:
+      dockerfile: ./flink.Dockerfile
+    depends_on:
+      - flink-jobmanager
+    command: taskmanager
+    scale: 1
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2        
+  flink-sql-client:
+    build:
+      dockerfile: ./flink.Dockerfile
+    command: bin/sql-client.sh
+    depends_on:
+      - flink-jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        rest.address: flink-jobmanager        
+
   setup:
     image: alpine:latest
     environment:
@@ -78,3 +114,6 @@ services:
       - postgres
       - kafka-broker
       - kafka-connect
+      - flink-jobmanager
+      - flink-taskmanager
+      - flink-sql-client
