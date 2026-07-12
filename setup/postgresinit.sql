@@ -1,7 +1,3 @@
-CREATE DATABASE world_data;
-
-\c world_data;
-
 CREATE TABLE IF NOT EXISTS country (
     id INT PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
@@ -15,6 +11,8 @@ CREATE TABLE IF NOT EXISTS city (
     population INT,
     FOREIGN KEY (country_id) REFERENCES country(id)
 );
+
+-- Mock data
 
 INSERT INTO country (id, name, code) VALUES
 (1, 'France', 'FR'),

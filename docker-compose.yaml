@@ -1,29 +1,20 @@
 services:
   postgres:
-    image: postgres:latest
+    image: postgres:16
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=4"
+      - "-c"
+      - "max_wal_senders=4"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
     ports:
       - "5432:5432"
-
-  postgres-setup:
-    image: postgres:latest
-    environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: postgres
-    volumes:
-      - ./setup/postgres/:/tmp/setup/postgres/
-    working_dir: /tmp/setup/postgres
-    command:
-      - bash
-      - setup.sh
-    depends_on:
-      - postgres
 
   kafka-broker:
     image: apache/kafka:latest
@@ -46,16 +37,44 @@ services:
       KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
 
-  kafka-broker-setup:
-    image: apache/kafka:latest
-    environment:
-      KAFKA_HOST: kafka-broker
-      KAFKA_PORT: 29092
-    volumes:
-      - ./setup/kafka-broker/:/tmp/setup/kafka-broker/
-    working_dir: /tmp/setup/kafka-broker
-    command:
-      - bash
-      - setup.sh
+  kafka-connect:
+    image: debezium/connect:2.7.0.Final
     depends_on:
       - kafka-broker
+      - postgres
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka-broker:29092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: connect-configs
+      OFFSET_STORAGE_TOPIC: connect-offsets
+      STATUS_STORAGE_TOPIC: connect-statuses
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+
+  setup:
+    image: alpine:latest
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: world_data
+      KAFKA_HOST: kafka-broker
+      KAFKA_PORT: 29092
+      KAFKA_CONNECT_HOST: kafka-connect
+      KAFKA_CONNECT_PORT: 8083
+      DEBEZIUM_USER: debezium
+      DEBEZIUM_PASSWORD: dbz
+    volumes:
+      - ./setup/:/tmp/setup/
+    working_dir: /tmp/setup
+    command:
+      - /bin/sh
+      - setup.sh
+    depends_on:
+      - postgres
+      - kafka-broker
+      - kafka-connect
