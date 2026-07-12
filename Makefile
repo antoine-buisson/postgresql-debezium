@@ -14,7 +14,7 @@ register:
 	docker compose run --rm setup
 
 consume:
-	docker compose exec -T kafka-broker /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic dbserver1.public.country --from-beginning
+	docker compose exec -T kafka-broker /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic dbserver1.public.book_references --from-beginning
 
 insert-random:
 	docker compose exec -T postgres psql -U postgres -d world_data -c "INSERT INTO country (id, name, code) VALUES ($$(date +%s), 'Random-$$(date +%H%M%S)', 'R$$(date +%H%M%S)');"

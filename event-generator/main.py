@@ -1,7 +1,7 @@
 import os
 import random
 from datetime import date
-from sqlalchemy import create_engine, select
+from sqlalchemy import ForeignKey, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, Session
 
 POSTGRES_USER = os.environ["POSTGRES_USER"]
@@ -20,27 +20,43 @@ class BookReference(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str]
     author: Mapped[str]
-    inventories: Mapped[list["BookInventory"]] = relationship("BookInventory", backref="reference")
-    
+    inventories: Mapped[list["BookInventory"]] = relationship(
+        "BookInventory",
+        back_populates="reference",
+        cascade="all, delete-orphan",
+    )
+
+
 class BookInventory(Base):
     __tablename__ = "book_inventories"
     id: Mapped[int] = mapped_column(primary_key=True)
     is_available: Mapped[bool] = mapped_column(default=True)
-    reference_id: Mapped[int] = mapped_column(foreign_key="book_references.id")
-    reference: Mapped["BookReference"] = relationship("BookReference", backref="inventories")
-    rentals: Mapped[list["BookRental"]] = relationship("BookRental", backref="inventory")
-    
+    reference_id: Mapped[int] = mapped_column(ForeignKey("book_references.id"))
+    reference: Mapped["BookReference"] = relationship(
+        "BookReference",
+        back_populates="inventories",
+    )
+    rentals: Mapped[list["BookRental"]] = relationship(
+        "BookRental",
+        back_populates="inventory",
+        cascade="all, delete-orphan",
+    )
+
+
 class BookRental(Base):
     __tablename__ = "book_rentals"
     id: Mapped[int] = mapped_column(primary_key=True)
     rental_date: Mapped[date]
-    inventory_id: Mapped[int] = mapped_column(foreign_key="book_inventories.id")
-    inventory: Mapped["BookInventory"] = relationship("BookInventory", backref="rentals")
+    inventory_id: Mapped[int] = mapped_column(ForeignKey("book_inventories.id"))
+    inventory: Mapped["BookInventory"] = relationship(
+        "BookInventory",
+        back_populates="rentals",
+    )
 
 
 def _ensure_ready(session: Session):
     with session.begin():
-        Base.metadata.create_all(session)
+        Base.metadata.create_all(session.get_bind())
 
 # ----------- Private API functions -----------
     
