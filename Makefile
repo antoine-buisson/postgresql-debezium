@@ -24,3 +24,6 @@ psql:
 
 logs:
 	docker compose logs -f postgres kafka-broker kafka-connect setup
+
+flink-sql:
+	docker compose run flink-sql-client

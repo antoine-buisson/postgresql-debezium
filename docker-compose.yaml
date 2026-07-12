@@ -88,7 +88,7 @@ services:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: flink-jobmanager
-        rest.address: flink-jobmanager        
+        rest.address: flink-jobmanager
 
   setup:
     image: alpine:latest
@@ -97,7 +97,7 @@ services:
       POSTGRES_PORT: 5432
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: world_data
+      POSTGRES_DB: library
       KAFKA_HOST: kafka-broker
       KAFKA_PORT: 29092
       KAFKA_CONNECT_HOST: kafka-connect
@@ -117,3 +117,15 @@ services:
       - flink-jobmanager
       - flink-taskmanager
       - flink-sql-client
+
+  event-generator:
+    build:
+      dockerfile: ./event-generator.Dockerfile
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: library
+    depends_on:
+      - setup

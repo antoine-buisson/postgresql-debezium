@@ -33,8 +33,6 @@ done
 psql postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/postgres \
     -c "CREATE DATABASE $POSTGRES_DB;"
 
-psql postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/$POSTGRES_DB -f postgres.init.sql
-
 psql postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/$POSTGRES_DB \
     -c "CREATE ROLE $DEBEZIUM_USER WITH SUPERUSER LOGIN REPLICATION PASSWORD '$DEBEZIUM_PASSWORD';"
 
@@ -63,7 +61,6 @@ connector_payload=$(cat <<EOF
     "database.password": "$DEBEZIUM_PASSWORD",
     "database.dbname": "$POSTGRES_DB",
     "database.server.name": "postgresql",
-    "table.include.list": "public.country,public.city",
     "topic.prefix": "dbserver1"
   }
 }
