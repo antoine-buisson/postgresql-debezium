@@ -37,7 +37,7 @@ services:
       KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
 
-  kafka-connect:
+  debezium:
     image: debezium/connect:2.7.0.Final
     depends_on:
       - kafka-broker
@@ -54,41 +54,17 @@ services:
       VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
       CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
 
-
-  flink-jobmanager:
+  spark:
     build:
-      dockerfile: ./flink.Dockerfile
+      dockerfile: ./spark.Dockerfile
+    command:
+      - /opt/spark/sbin/start-connect-server.sh
+      - --wait
     ports:
-      - "8081:8081"
-    command: jobmanager
-    environment:
-      - |
-        FLINK_PROPERTIES=
-        jobmanager.rpc.address: flink-jobmanager        
-
-  flink-taskmanager:
-    build:
-      dockerfile: ./flink.Dockerfile
+      - "15002:15002"
+      - "4040:4040"
     depends_on:
-      - flink-jobmanager
-    command: taskmanager
-    scale: 1
-    environment:
-      - |
-        FLINK_PROPERTIES=
-        jobmanager.rpc.address: flink-jobmanager
-        taskmanager.numberOfTaskSlots: 2        
-  flink-sql-client:
-    build:
-      dockerfile: ./flink.Dockerfile
-    command: bin/sql-client.sh
-    depends_on:
-      - flink-jobmanager
-    environment:
-      - |
-        FLINK_PROPERTIES=
-        jobmanager.rpc.address: flink-jobmanager
-        rest.address: flink-jobmanager
+      - kafka-broker
 
   setup:
     image: alpine:latest
@@ -100,7 +76,7 @@ services:
       POSTGRES_DB: library
       KAFKA_HOST: kafka-broker
       KAFKA_PORT: 29092
-      KAFKA_CONNECT_HOST: kafka-connect
+      KAFKA_CONNECT_HOST: debezium
       KAFKA_CONNECT_PORT: 8083
       DEBEZIUM_USER: debezium
       DEBEZIUM_PASSWORD: dbz
@@ -113,10 +89,7 @@ services:
     depends_on:
       - postgres
       - kafka-broker
-      - kafka-connect
-      - flink-jobmanager
-      - flink-taskmanager
-      - flink-sql-client
+      - debezium
 
   event-generator:
     build:
@@ -129,3 +102,17 @@ services:
       POSTGRES_DB: library
     depends_on:
       - setup
+
+  jupyter:
+    build:
+      dockerfile: ./jupyter.Dockerfile
+    ports:
+      - "8888:8888"
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+      JUPYTER_TOKEN: "mytoken"
+    volumes:
+      - ./jupyter:/home/jovyan/work
+    depends_on:
+      - setup
+      - spark
