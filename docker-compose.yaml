@@ -12,6 +12,78 @@ services:
     env_file: ".env"
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  postgres-setup:
+    image: alpine/psql:16.3
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB_MAIN=${POSTGRES_DB_MAIN:-library}
+      - POSTGRES_DB_MONITORING=${POSTGRES_DB_MONITORING:-monitoring}
+      - POSTGRES_USER_EVENT_GENERATOR=${POSTGRES_USER_EVENT_GENERATOR:-eventgenerator}
+      - POSTGRES_PASSWORD_EVENT_GENERATOR=${POSTGRES_PASSWORD_EVENT_GENERATOR:-eventgenerator}
+      - POSTGRES_USER_DEBEZIUM=${POSTGRES_USER_DEBEZIUM:-debezium}
+      - POSTGRES_PASSWORD_DEBEZIUM=${POSTGRES_PASSWORD_DEBEZIUM:-debezium}
+      - POSTGRES_USER_MONITORING=${POSTGRES_USER_MONITORING:-monitoring}
+      - POSTGRES_PASSWORD_MONITORING=${POSTGRES_PASSWORD_MONITORING:-monitoring}
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        set -e
+
+        echo "Creating Main Postgres Database '$$POSTGRES_DB_MAIN'..."
+        psql postgres://$$POSTGRES_USER:$$POSTGRES_PASSWORD@$$POSTGRES_HOST:$$POSTGRES_PORT/postgres -c "CREATE DATABASE $$POSTGRES_DB_MAIN;" || {
+          echo "❌ Failed to create database '$$POSTGRES_DB_MAIN'"
+          exit 1
+        }
+        echo "✅ Main Postgres Database '$$POSTGRES_DB_MAIN' created"
+
+        echo "Creating Monitoring Postgres Database '$$POSTGRES_DB_MONITORING'..."
+        psql postgres://$$POSTGRES_USER:$$POSTGRES_PASSWORD@$$POSTGRES_HOST:$$POSTGRES_PORT/postgres -c "CREATE DATABASE $$POSTGRES_DB_MONITORING;" || {
+          echo "❌ Failed to create database '$$POSTGRES_DB_MONITORING'"
+          exit 1
+        }
+        echo "✅ Monitoring Postgres Database '$$POSTGRES_DB_MONITORING' created"
+
+        echo "Creating Postgres User Event Generator '$$POSTGRES_USER_EVENT_GENERATOR'..."
+        psql postgres://$$POSTGRES_USER:$$POSTGRES_PASSWORD@$$POSTGRES_HOST:$$POSTGRES_PORT/$$POSTGRES_DB_MAIN -c "CREATE ROLE $$POSTGRES_USER_EVENT_GENERATOR WITH LOGIN PASSWORD '$$POSTGRES_PASSWORD_EVENT_GENERATOR'; GRANT ALL PRIVILEGES ON SCHEMA public TO $$POSTGRES_USER_EVENT_GENERATOR;" || {
+          echo "❌ Failed to create postgres user '$$POSTGRES_USER_EVENT_GENERATOR'"
+          exit 1
+        }
+        echo "✅ Postgres User Event Generator '$$POSTGRES_USER_EVENT_GENERATOR' created"
+
+        echo "Creating Postgres Debezium '$$POSTGRES_USER_DEBEZIUM'..."
+        psql postgres://$$POSTGRES_USER:$$POSTGRES_PASSWORD@$$POSTGRES_HOST:$$POSTGRES_PORT/$$POSTGRES_DB_MAIN -c "CREATE ROLE $$POSTGRES_USER_DEBEZIUM WITH SUPERUSER LOGIN REPLICATION PASSWORD '$$POSTGRES_PASSWORD_DEBEZIUM'; GRANT ALL PRIVILEGES ON DATABASE $$POSTGRES_DB_MAIN TO $$POSTGRES_USER_DEBEZIUM;" || {
+          echo "❌ Failed to create postgres user '$$POSTGRES_USER_DEBEZIUM'"
+          exit 1
+        }
+        echo "✅ Postgres Debezium '$$POSTGRES_USER_DEBEZIUM' created"
+
+        echo "Creating Postgres Monitoring '$$POSTGRES_USER_MONITORING'..."
+        psql postgres://$$POSTGRES_USER:$$POSTGRES_PASSWORD@$$POSTGRES_HOST:$$POSTGRES_PORT/$$POSTGRES_DB_MONITORING -c "CREATE ROLE $$POSTGRES_USER_MONITORING WITH SUPERUSER LOGIN REPLICATION PASSWORD '$$POSTGRES_PASSWORD_MONITORING'; GRANT ALL PRIVILEGES ON DATABASE $$POSTGRES_DB_MONITORING TO $$POSTGRES_USER_MONITORING;" || {
+          echo "❌ Failed to create postgres user '$$POSTGRES_USER_MONITORING'"
+          exit 1
+        }
+        echo "✅ Postgres Monitoring '$$POSTGRES_USER_MONITORING' created"
+
+        touch /tmp/postgres-setup-done
+        tail -f /dev/null
+    healthcheck:
+      interval: 1s
+      timeout: 10s
+      retries: 240
+      test: ["CMD", "test", "-f", "/tmp/postgres-setup-done"]
 
   kafka-broker:
     image: apache/kafka:latest
@@ -36,9 +108,6 @@ services:
 
   debezium:
     image: debezium/connect:2.7.0.Final
-    depends_on:
-      - kafka-broker
-      - postgres
     ports:
       - "8083:8083"
     environment:
@@ -51,6 +120,290 @@ services:
       VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
       CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
 
+  debezium-setup:
+    image: alpine/curl:8.21.0
+    depends_on:
+      debezium:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      kafka-broker:
+        condition: service_healthy
+      postgres-setup:
+        condition: service_completed_successfully
+    environment:
+      - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_USER=${POSTGRES_USER_DEBEZIUM:-debezium}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD_DEBEZIUM:-debezium}
+      - POSTGRES_DB=${POSTGRES_DB_MAIN:-library}
+      - TOPIC_PREFIX=${DEBEZIUM_TOPIC_PREFIX:-postgresql}
+      - KAFKA_CONNECT_HOST=${DEBEZIUM_KAFKA_CONNECT_HOST:-debezium}
+      - KAFKA_CONNECT_PORT=${DEBEZIUM_KAFKA_CONNECT_PORT:-8083}
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        set -e
+
+        echo "Creating Debezium connector to '$$POSTGRES_DB' postgres database with topic prefix '$$TOPIC_PREFIX'..."
+        PAYLOAD='{
+          "name": "postgres-connector",
+          "config": {
+            "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+            "plugin.name": "pgoutput",
+            "database.hostname": "'$$POSTGRES_HOST'",
+            "database.port": "'$$POSTGRES_PORT'",
+            "database.user": "'$$POSTGRES_USER'",
+            "database.password": "'$$POSTGRES_PASSWORD'",
+            "database.dbname": "'$$POSTGRES_DB'",
+            "database.server.name": "postgresql",
+            "topic.prefix": "'$$TOPIC_PREFIX'"
+          }
+        }'
+
+        RESPONSE=$$(curl --fail-with-body -s -S -X POST http://$KAFKA_CONNECT_HOST:$KAFKA_CONNECT_PORT/connectors \
+          -H "Accept: application/json" \
+          -H "Content-Type: application/json" \
+          -d "$$PAYLOAD" 2>&1) && echo -n "" || {
+            echo "❌ Failed to create Debezium Connector"
+            echo "$$RESPONSE" >&2
+            exit 1
+          }
+        echo "✅ Debezium Connector created"
+
+        touch /tmp/debezium-setup-done
+        tail -f /dev/null
+    healthcheck:
+      interval: 1s
+      timeout: 10s
+      retries: 240
+      test: ["CMD", "test", "-f", "/tmp/debezium-setup-done"]
+
+  rustfs:
+    image: rustfs/rustfs:1.0.0-alpha.81
+    ports:
+      # API port
+      - "9000:9000"
+      # UI port
+      - "9001:9001"
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-polaris_root}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-polaris_pass}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://127.0.0.1:9000/health && curl --fail http://127.0.0.1:9001/rustfs/console/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  rustfs-setup:
+    image: amazon/aws-cli:2.35.21
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-polaris_root}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-polaris_pass}
+      AWS_ENDPOINT_URL: http://rustfs:9000
+    entrypoint: "/bin/sh"
+    command:
+      - "-c"
+      - >-
+        echo Creating RustFS bucket... &&
+        aws s3 mb s3://bucket123 &&
+        aws s3 ls &&
+        echo Bucket setup complete.
+
+  polaris:
+    image: apache/polaris:latest
+    ports:
+      # API port
+      - "8181:8181"
+      # Management port (metrics and health checks)
+      - "8182:8182"
+      # Optional, allows attaching a debugger to the Polaris JVM
+      - "5005:5005"
+    depends_on:
+      rustfs:
+        condition: service_healthy
+      rustfs-setup:
+        condition: service_completed_successfully
+    environment:
+      JAVA_DEBUG: true
+      JAVA_DEBUG_PORT: "*:5005"
+      AWS_REGION: us-west-2
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-polaris_root}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-polaris_pass}
+      POLARIS_BOOTSTRAP_CREDENTIALS: POLARIS,${ROOT_CLIENT_ID:-root},${ROOT_CLIENT_SECRET:-s3cr3t}
+      polaris.realm-context.realms: ${POLARIS_REALM:-POLARIS}
+      quarkus.otel.sdk.disabled: "true"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8182/q/health"]
+      interval: 2s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+
+  polaris-setup:
+    image: alpine/curl:8.21.0
+    depends_on:
+      polaris:
+        condition: service_healthy
+    environment:
+      - CLIENT_ID=${ROOT_CLIENT_ID:-root}
+      - CLIENT_SECRET=${ROOT_CLIENT_SECRET:-s3cr3t}
+      - CATALOG_NAME=${CATALOG_NAME:-quickstart_catalog}
+      - REALM=${POLARIS_REALM:-POLARIS}
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        set -e
+        apk add --no-cache jq
+
+        echo "Obtaining root access token..."
+        TOKEN_RESPONSE=$$(curl --fail-with-body -s -S -X POST http://polaris:8181/api/catalog/v1/oauth/tokens \
+          -H 'Content-Type: application/x-www-form-urlencoded' \
+          -d "grant_type=client_credentials&client_id=$${CLIENT_ID}&client_secret=$${CLIENT_SECRET}&scope=PRINCIPAL_ROLE:ALL" 2>&1) || {
+          echo "❌ Failed to obtain access token"
+          echo "$$TOKEN_RESPONSE" >&2
+          exit 1
+        }
+
+        TOKEN=$$(echo $$TOKEN_RESPONSE | jq -r '.access_token')
+        if [ -z "$$TOKEN" ] || [ "$$TOKEN" = "null" ]; then
+          echo "❌ Failed to parse access token from response"
+          echo "$$TOKEN_RESPONSE"
+          exit 1
+        fi
+        echo "✅ Obtained access token"
+
+        echo "Creating catalog '$$CATALOG_NAME' in realm $$REALM..."
+        PAYLOAD='{
+          "catalog": {
+            "name": "'$$CATALOG_NAME'",
+            "type": "INTERNAL",
+            "readOnly": false,
+            "properties": {
+              "default-base-location": "s3://bucket123"
+            },
+            "storageConfigInfo": {
+              "storageType": "S3",
+              "allowedLocations": ["s3://bucket123"],
+              "endpoint": "http://localhost:9000",
+              "endpointInternal": "http://rustfs:9000",
+              "pathStyleAccess": true,
+              "region": "us-west-2"
+            }
+          }
+        }'
+
+        RESPONSE=$$(curl --fail-with-body -s -S -X POST http://polaris:8181/api/management/v1/catalogs \
+          -H "Authorization: Bearer $$TOKEN" \
+          -H "Accept: application/json" \
+          -H "Content-Type: application/json" \
+          -H "Polaris-Realm: $$REALM" \
+          -d "$$PAYLOAD" 2>&1) && echo -n "" || {
+          echo "❌ Failed to create catalog"
+          echo "$$RESPONSE" >&2
+          exit 1
+        }
+        echo "✅ Catalog created"
+
+        echo ""
+        echo "Creating principal 'quickstart_user'..."
+        PRINCIPAL_RESPONSE=$$(curl --fail-with-body -s -X POST http://polaris:8181/api/management/v1/principals \
+          -H "Authorization: Bearer $$TOKEN" \
+          -H "Polaris-Realm: $$REALM" \
+          -H "Content-Type: application/json" \
+          -d '{"principal": {"name": "quickstart_user", "properties": {}}}' 2>&1) || {
+          echo "❌ Failed to create principal"
+          echo "$$PRINCIPAL_RESPONSE" >&2
+          exit 1
+        }
+
+        USER_CLIENT_ID=$$(echo $$PRINCIPAL_RESPONSE | jq -r '.credentials.clientId')
+        USER_CLIENT_SECRET=$$(echo $$PRINCIPAL_RESPONSE | jq -r '.credentials.clientSecret')
+        if [ -z "$$USER_CLIENT_ID" ] || [ "$$USER_CLIENT_ID" = "null" ] || [ -z "$$USER_CLIENT_SECRET" ] || [ "$$USER_CLIENT_SECRET" = "null" ]; then
+          echo "❌ Failed to parse user credentials from response"
+          echo "$$PRINCIPAL_RESPONSE"
+          exit 1
+        fi
+        echo "✅ Principal created with clientId: $$USER_CLIENT_ID"
+
+        echo "Creating principal role 'quickstart_user_role'..."
+        RESPONSE=$$(curl --fail-with-body -s -S -X POST http://polaris:8181/api/management/v1/principal-roles \
+          -H "Authorization: Bearer $$TOKEN" \
+          -H "Polaris-Realm: $$REALM" \
+          -H "Content-Type: application/json" \
+          -d '{"principalRole": {"name": "quickstart_user_role", "properties": {}}}' 2>&1) && echo -n "" || {
+          echo "❌ Failed to create principal role"
+          echo "$$RESPONSE" >&2
+          exit 1
+        }
+        echo "✅ Principal role created"
+
+        echo "Creating catalog role 'quickstart_catalog_role'..."
+        RESPONSE=$$(curl --fail-with-body -s -S -X POST http://polaris:8181/api/management/v1/catalogs/$$CATALOG_NAME/catalog-roles \
+          -H "Authorization: Bearer $$TOKEN" \
+          -H "Polaris-Realm: $$REALM" \
+          -H "Content-Type: application/json" \
+          -d '{"catalogRole": {"name": "quickstart_catalog_role", "properties": {}}}' 2>&1) && echo -n "" || {
+          echo "❌ Failed to create catalog role"
+          echo "$$RESPONSE" >&2
+          exit 1
+        }
+        echo "✅ Catalog role created"
+
+        echo "Assigning principal role to principal..."
+        RESPONSE=$$(curl --fail-with-body -s -S -X PUT http://polaris:8181/api/management/v1/principals/quickstart_user/principal-roles \
+          -H "Authorization: Bearer $$TOKEN" \
+          -H "Polaris-Realm: $$REALM" \
+          -H "Content-Type: application/json" \
+          -d '{"principalRole": {"name": "quickstart_user_role"}}' 2>&1) && echo -n "" || {
+          echo "❌ Failed to assign principal role"
+          echo "$$RESPONSE" >&2
+          exit 1
+        }
+        echo "✅ Principal role assigned"
+
+        echo "Assigning catalog role to principal role..."
+        RESPONSE=$$(curl --fail-with-body -s -S -X PUT http://polaris:8181/api/management/v1/principal-roles/quickstart_user_role/catalog-roles/$$CATALOG_NAME \
+          -H "Authorization: Bearer $$TOKEN" \
+          -H "Polaris-Realm: $$REALM" \
+          -H "Content-Type: application/json" \
+          -d '{"catalogRole": {"name": "quickstart_catalog_role"}}' 2>&1) && echo -n "" || {
+          echo "❌ Failed to assign catalog role"
+          echo "$$RESPONSE" >&2
+          exit 1
+        }
+        echo "✅ Catalog role assigned"
+
+        echo "Granting CATALOG_MANAGE_CONTENT privilege..."
+        RESPONSE=$$(curl --fail-with-body -s -S -X PUT http://polaris:8181/api/management/v1/catalogs/$$CATALOG_NAME/catalog-roles/quickstart_catalog_role/grants \
+          -H "Authorization: Bearer $$TOKEN" \
+          -H "Polaris-Realm: $$REALM" \
+          -H "Content-Type: application/json" \
+          -d '{"type": "catalog", "privilege": "CATALOG_MANAGE_CONTENT"}' 2>&1) && echo -n "" || {
+          echo "❌ Failed to grant privileges"
+          echo "$$RESPONSE" >&2
+          exit 1
+        }
+        echo "✅ Privileges granted"
+ 
+        touch /tmp/polaris-setup-done
+        tail -f /dev/null
+    healthcheck:
+      interval: 1s
+      timeout: 10s
+      retries: 240
+      test: ["CMD", "test", "-f", "/tmp/polaris-setup-done"]
+
   spark:
     build:
       dockerfile: ./spark.Dockerfile
@@ -60,29 +413,6 @@ services:
     ports:
       - "15002:15002"
       - "4040:4040"
-    depends_on:
-      - kafka-broker
-
-  setup:
-    image: alpine:latest
-    env_file: ".env"
-    volumes:
-      - ./setup/:/tmp/setup/
-    working_dir: /tmp/setup
-    command:
-      - /bin/sh
-      - setup.sh
-    depends_on:
-      - postgres
-      - kafka-broker
-      - debezium
-
-  event-generator:
-    build:
-      dockerfile: ./event-generator.Dockerfile
-    env_file: ".env"
-    depends_on:
-      - setup
 
   jupyter:
     build:
@@ -92,6 +422,11 @@ services:
     env_file: ".env"
     volumes:
       - ./jupyter:/home/jovyan/work
+
+  event-generator:
+    build:
+      dockerfile: ./event-generator.Dockerfile
+    env_file: ".env"
     depends_on:
-      - setup
-      - spark
+      postgres-setup:
+        condition: service_completed_successfully
