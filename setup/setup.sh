@@ -1,5 +1,9 @@
 #!/bin/sh
 
+# ============================
+#       Bins and helpers
+# ============================
+
 apk add --no-cache postgresql-client curl netcat-openbsd
 
 add_configuration () {
@@ -13,31 +17,43 @@ add_configuration () {
   fi
 }
 
+run_postgres_query_on_db () {
+  psql postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/$1 -c "$2";
+}
+
+# ============================
+#       Configuration
+# ============================
+
 add_configuration "$POSTGRES_HOST" "POSTGRES_HOST"
 add_configuration "$POSTGRES_PORT" "POSTGRES_PORT" 5432
+
+add_configuration "$POSTGRES_DB" "POSTGRES_DB"
+add_configuration "$MAIN_DB" "MAIN_DB"
+add_configuration "$MONITORING_DB" "MONITORING_DB"
+
 add_configuration "$POSTGRES_USER" "POSTGRES_USER"
 add_configuration "$POSTGRES_PASSWORD" "POSTGRES_PASSWORD"
-add_configuration "$POSTGRES_DB" "POSTGRES_DB"
+add_configuration "$EVENT_GENERATOR_USER" "EVENT_GENERATOR_USER"
+add_configuration "$EVENT_GENERATOR_PASSWORD" "EVENT_GENERATOR_PASSWORD"
+add_configuration "$DEBEZIUM_USER" "DEBEZIUM_USER"
+add_configuration "$DEBEZIUM_PASSWORD" "DEBEZIUM_PASSWORD"
+add_configuration "$MONITORING_USER" "MONITORING_USER"
+add_configuration "$MONITORING_PASSWORD" "MONITORING_PASSWORD"
+
 add_configuration "$KAFKA_HOST" "KAFKA_HOST"
 add_configuration "$KAFKA_PORT" "KAFKA_PORT" 29092
 add_configuration "$KAFKA_CONNECT_HOST" "KAFKA_CONNECT_HOST"
 add_configuration "$KAFKA_CONNECT_PORT" "KAFKA_CONNECT_PORT" 8083
-add_configuration "$DEBEZIUM_USER" "DEBEZIUM_USER"
-add_configuration "$DEBEZIUM_PASSWORD" "DEBEZIUM_PASSWORD"
+
+# ============================
+#       Health Checks
+# ============================
 
 until pg_isready -h $POSTGRES_HOST -p $POSTGRES_PORT; do
     echo "Waiting for PostgreSQL to be ready..."
     sleep 2
 done
-
-psql postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/postgres \
-    -c "CREATE DATABASE $POSTGRES_DB;"
-
-psql postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/$POSTGRES_DB \
-    -c "CREATE ROLE $DEBEZIUM_USER WITH SUPERUSER LOGIN REPLICATION PASSWORD '$DEBEZIUM_PASSWORD';"
-
-psql postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/$POSTGRES_DB \
-    -c "GRANT ALL PRIVILEGES ON DATABASE $POSTGRES_DB TO $DEBEZIUM_USER;"
 
 until nc -z "$KAFKA_HOST" "$KAFKA_PORT"; do
     echo "Waiting for Kafka to be ready..."
@@ -49,6 +65,27 @@ until nc -z "$KAFKA_CONNECT_HOST" "$KAFKA_CONNECT_PORT"; do
     sleep 2
 done
 
+# ============================
+#       Postgres Setup
+# ============================
+
+run_postgres_query_on_db "$POSTGRES_DB" "CREATE DATABASE $MAIN_DB;"
+
+run_postgres_query_on_db "$POSTGRES_DB" "CREATE DATABASE $MONITORING_DB;"
+
+run_postgres_query_on_db "$POSTGRES_DB" "CREATE ROLE $EVENT_GENERATOR_USER WITH LOGIN PASSWORD '$EVENT_GENERATOR_PASSWORD';"
+run_postgres_query_on_db "$MAIN_DB" "GRANT ALL PRIVILEGES ON SCHEMA public TO $EVENT_GENERATOR_USER;"
+
+run_postgres_query_on_db "$POSTGRES_DB" "CREATE ROLE $DEBEZIUM_USER WITH SUPERUSER LOGIN REPLICATION PASSWORD '$DEBEZIUM_PASSWORD';"
+run_postgres_query_on_db "$MAIN_DB" "GRANT ALL PRIVILEGES ON DATABASE $MAIN_DB TO $DEBEZIUM_USER;"
+
+run_postgres_query_on_db "$POSTGRES_DB" "CREATE ROLE $MONITORING_USER WITH SUPERUSER LOGIN REPLICATION PASSWORD '$MONITORING_PASSWORD';"
+run_postgres_query_on_db "$MONITORING_DB" "GRANT ALL PRIVILEGES ON DATABASE $MONITORING_DB TO $MONITORING_USER;"
+
+# ============================
+#       Debezium Setup
+# ============================
+
 connector_payload=$(cat <<EOF
 {
   "name": "postgres-connector",
@@ -59,7 +96,7 @@ connector_payload=$(cat <<EOF
     "database.port": "$POSTGRES_PORT",
     "database.user": "$DEBEZIUM_USER",
     "database.password": "$DEBEZIUM_PASSWORD",
-    "database.dbname": "$POSTGRES_DB",
+    "database.dbname": "$MAIN_DB",
     "database.server.name": "postgresql",
     "topic.prefix": "dbserver1"
   }

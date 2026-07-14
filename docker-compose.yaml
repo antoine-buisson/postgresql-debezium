@@ -9,10 +9,7 @@ services:
       - "max_replication_slots=4"
       - "-c"
       - "max_wal_senders=4"
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: postgres
+    env_file: ".env"
     ports:
       - "5432:5432"
 
@@ -68,18 +65,7 @@ services:
 
   setup:
     image: alpine:latest
-    environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: library
-      KAFKA_HOST: kafka-broker
-      KAFKA_PORT: 29092
-      KAFKA_CONNECT_HOST: debezium
-      KAFKA_CONNECT_PORT: 8083
-      DEBEZIUM_USER: debezium
-      DEBEZIUM_PASSWORD: dbz
+    env_file: ".env"
     volumes:
       - ./setup/:/tmp/setup/
     working_dir: /tmp/setup
@@ -94,12 +80,7 @@ services:
   event-generator:
     build:
       dockerfile: ./event-generator.Dockerfile
-    environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: library
+    env_file: ".env"
     depends_on:
       - setup
 
@@ -108,9 +89,7 @@ services:
       dockerfile: ./jupyter.Dockerfile
     ports:
       - "8888:8888"
-    environment:
-      JUPYTER_ENABLE_LAB: "yes"
-      JUPYTER_TOKEN: "mytoken"
+    env_file: ".env"
     volumes:
       - ./jupyter:/home/jovyan/work
     depends_on:
