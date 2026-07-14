@@ -9,16 +9,16 @@ from sqlalchemy import ForeignKey, create_engine, func, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 
-EVENT_GENERATOR_USER = os.environ["EVENT_GENERATOR_USER"]
-EVENT_GENERATOR_PASSWORD = os.environ["EVENT_GENERATOR_PASSWORD"]
+POSTGRES_USER_EVENT_GENERATOR = os.environ["POSTGRES_USER_EVENT_GENERATOR"]
+POSTGRES_PASSWORD_EVENT_GENERATOR = os.environ["POSTGRES_PASSWORD_EVENT_GENERATOR"]
 POSTGRES_HOST = os.environ["POSTGRES_HOST"]
 POSTGRES_PORT = os.environ["POSTGRES_PORT"]
-MAIN_DB = os.environ["MAIN_DB"]
+POSTGRES_DB_MAIN = os.environ["POSTGRES_DB_MAIN"]
 SLEEP_SECONDS = float(os.getenv("GENERATOR_SLEEP_SECONDS", "1.2"))
 DB_STARTUP_TIMEOUT_SECONDS = int(os.getenv("GENERATOR_DB_STARTUP_TIMEOUT_SECONDS", "60"))
 
 engine = create_engine(
-    f"postgresql://{EVENT_GENERATOR_USER}:{EVENT_GENERATOR_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{MAIN_DB}"
+    f"postgresql://{POSTGRES_USER_EVENT_GENERATOR}:{POSTGRES_PASSWORD_EVENT_GENERATOR}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB_MAIN}"
 )
 
 
